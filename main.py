@@ -1,40 +1,28 @@
 import torchvision
 import torch
-import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset
 import torch.nn.functional as F
-from utils import T
+
 from model import NoisePredictor
-import time
+
+from utils import T, get_save_path
+from plot import plot_loss, rescale_image, show_images, show_diffuse_process
 
 
 DATA_ROOT = "./ds"
 MODEL_PATH = "./models"
 device = torch.device("cude" if torch.cuda.is_available() else "cpu")
 
-#
-# fig, axs = plt.subplots(1, 5, figsize=(12, 3))
-#
-# for i in range(5):
-#     image, label = train[i]
-#     image = image.permute(1, 2, 0)
-#
-#     axs[i].imshow(image)
-#     axs[i].set_title(train.classes[label])
-#     axs[i].axis("off")
-#
-#
-# plt.tight_layout()
-# plt.show()
 
-#
-# def unnormalize(img):
-#     return (img * 0.5 + 0.5).clamp(0, 1)
-#
+beta_start = 1e-4
+beta_end = 0.02
+num_epochs = 500
+betas = torch.linspace(beta_start, beta_end, T)
 
 
 def q_sample(x0, t, alphas_cumprod, noise=None):
+    # adds noise to sample x_0
     if noise is None:
         noise = torch.randn_like(x0)
     sqrt_alpha_bar = torch.sqrt(alphas_cumprod[t])
@@ -48,62 +36,6 @@ def q_sample(x0, t, alphas_cumprod, noise=None):
         sqrt_alpha_bar = sqrt_alpha_bar[:, None, None, None]
         sqrt_one_minus = sqrt_one_minus[:, None, None, None]
     return sqrt_alpha_bar * x0 + sqrt_one_minus * noise
-
-
-def get_save_path(epochs: int, num_images):
-    str_time = time.strftime("%Y-%m-%d %H:%M:%S")
-    time_path = f"{MODEL_PATH}/{num_images}@{str_time}-for-{epochs}"
-    return time_path
-
-
-#
-#
-# i = random.randint(0, 10)
-# x, _ = train[2]
-#
-# y = q_sample(x, 300)
-#
-# fig, axs = plt.subplots(1, 2, figsize=(12, 3))
-#
-# x = unnormalize(x).permute(1, 2, 0)
-# y = unnormalize(y).permute(1, 2, 0)
-#
-# axs[0].imshow(x)
-# axs[1].imshow(y)
-# for i in range(2):
-#     axs[i].axis("off")
-#
-#
-# plt.tight_layout()
-# plt.show()
-
-
-def plot_loss(losses):
-    plt.plot(losses)
-    plt.ylabel("Loss")
-    plt.xlabel("Epoch")
-    plt.show()
-
-
-def show_images(images, nrow):
-    """
-    Displays a batch of denoised images that were normalized with mean=0.5 and std=0.5.
-
-    Args:
-        images (Tensor): A batch of images (B, 3, H, W) in [-1, 1] range.
-        title (str): Plot title.
-        nrow (int): Number of images per row.
-    """
-    # Unnormalize from [-1, 1] to [0, 1]
-    images = images * 0.5 + 0.5
-    images = torch.clamp(images, 0, 1)
-
-    grid = torchvision.utils.make_grid(images, nrow=nrow)
-    plt.figure(figsize=(nrow, nrow))
-    plt.imshow(grid.permute(1, 2, 0).cpu().numpy())
-    plt.title("Denoised images")
-    plt.axis("off")
-    plt.show()
 
 
 def train(
@@ -165,9 +97,10 @@ def diffuse(x, betas, T):
     return x_t
 
 
-def denoise(x_T, model_path, T):
+def denoise(x_T, betas, model_path, T):
     assert x_T.ndim == 4  # (batch_size, 3, 32,32)
-    model = torch.load(model_path)
+    model = NoisePredictor()
+    model.load_state_dict(torch.load(model_path))
 
     alphas = 1 - betas
     alpha_bars = torch.cumprod(alphas, dim=0)  # TODO: what the fuck does cumprod do?
@@ -219,42 +152,20 @@ def sample(model, shape, betas, device):
     return x_t
 
 
-if __name__ == "__main__":
+def get_train_subset(size):
     transform = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
     )
     train_ds = torchvision.datasets.CIFAR10(
         DATA_ROOT, train=True, download=True, transform=transform
     )
-    print(len(train_ds))
-    subset_size = 50000
-    print(type(train_ds))
-    subset = Subset(train_ds, list(range(subset_size)))
-    subset_tensors = [subset[i][0] for i in range(len(subset))]
-    original_images = torch.stack(subset_tensors)
+    subset = Subset(train_ds, list(range(size)))
+    return subset
 
-    # get elements from tensor
 
-    beta_start = 1e-4  # TODO: move up
-    beta_end = 0.02
-    num_epochs = 5
-    steps = 1000
-    betas = torch.linspace(beta_start, beta_end, T)
-    res = diffuse(original_images, betas, steps)
-    print("Diffusion complete")
+def train_on_images(subset_size):
+    subset = get_train_subset(subset_size)
 
-    # denoised_images = denoise(
-    #     res, MODEL_PATH + "/50000 at 2025-08-04 17/50/42 for 5.pth", steps
-    # )
-    #
-    # show_images(original_images, subset_size)
-    # show_images(res, subset_size)
-    # show_images(denoised_images, subset_size)
-
-    beta_start = 1e-4  # TODO: move up
-    beta_end = 0.02
-    num_epochs = 5
-    betas = torch.linspace(beta_start, beta_end, T)
     model = NoisePredictor().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -262,20 +173,44 @@ if __name__ == "__main__":
 
     print("Training started")
 
-    model = train(
+    train(
         dataloader,
         num_epochs,
         model,
         optimizer,
         betas,
-        get_save_path(num_epochs, subset_size),
+        get_save_path(num_epochs, subset_size, MODEL_PATH),
         should_plot_loss=True,
     )
 
-    # print("Training finished")
-    # print("Generating samples")
-    #
+    print("Training finished")
+    print("Generating samples")
+
     # sample_count = 4
     # shape = (sample_count, 3, 32, 32)
     # results = sample(model, shape, betas, device)
     # show_images(results, sample_count)
+
+
+def test_on_images(size, model_path):
+    subset = get_train_subset(size)
+    subset_tensors = [subset[i][0] for i in range(len(subset))]
+    original_images = torch.stack(subset_tensors)
+
+    res = diffuse(original_images, betas, T)
+    print("Diffusion complete")
+
+    denoised_images = denoise(res, betas, model_path, T)
+
+    print("Displaying images")
+    show_diffuse_process(original_images, res, denoised_images, n_images=size)
+
+
+if __name__ == "__main__":
+    print(";)")
+    train_on_images(5)
+    print(":(")
+
+# TODO:
+# 3. Improve model and train again.
+# 4. Ensure displaying is done peroperly.
