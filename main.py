@@ -4,7 +4,7 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset
 import torch.nn.functional as F
 
-from model import NoisePredictor, UNet32
+from model import NoisePredictor, TimeConditionedUNet32
 
 from utils import T, get_save_path
 from plot import plot_loss, rescale_image, show_images, show_diffuse_process
@@ -17,7 +17,7 @@ device = torch.device("cude" if torch.cuda.is_available() else "cpu")
 
 beta_start = 1e-4
 beta_end = 0.02
-num_epochs = 10
+num_epochs = 5
 betas = torch.linspace(beta_start, beta_end, T)
 
 
@@ -99,7 +99,7 @@ def diffuse(x, betas, T):
 
 def denoise(x_T, betas, model_path, T):
     assert x_T.ndim == 4  # (batch_size, 3, 32,32)
-    model = UNet32()
+    model = TimeConditionedUNet32()
     model.load_state_dict(torch.load(model_path))
 
     alphas = 1 - betas
@@ -166,7 +166,7 @@ def get_train_subset(size):
 def train_on_images(subset_size):
     subset = get_train_subset(subset_size)
 
-    model = UNet32().to(device)
+    model = TimeConditionedUNet32().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     dataloader = DataLoader(subset, batch_size=128, shuffle=True)
@@ -208,5 +208,5 @@ def test_on_images(size, model_path):
 
 if __name__ == "__main__":
     print(";)")
-    test_on_images(5, MODEL_PATH + "/50000@2025-08-05_13-57-46-for-10.pth")
+    train_on_images(50000)
     print(":(")

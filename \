@@ -3,8 +3,6 @@ import torch
 from utils import T
 import math
 
-DEVICE = torch.device("cpu")
-
 
 class NoisePredictor(nn.Module):
     def __init__(self):
@@ -65,7 +63,7 @@ class DecoderBlock(nn.Module):
 
 
 class UNet32(nn.Module):
-    def __init__(self, in_channels=3):
+    def __init__(self, in_channels=3, num_classes=1):  # what is num_classes
         super().__init__()
 
         self.encoder1 = EncoderBlock(in_channels, 64)
@@ -110,7 +108,7 @@ class SinusoidalEmbedding(nn.Module):
     def forward(self, t):
         half_dim = self.embedding_dim // 2
         emb = math.log(T) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=DEVICE))
+        emb = torch.exp(torch.arange(half_dim, device=torch.device))
         emb = t[:, None] * emb[None, :]  # outer multiplication (B,1) * (1,D) -> (B,D)
         emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
         return emb
@@ -129,13 +127,13 @@ class TimeConditionedConv(nn.Module):
         """
         h = self.conv(x)
         time = (
-            self.time_proj(t_emb).unsqueeze(-1).unsqueeze(-1)
+            self.time_proj(t_emb).unsqueeze(-1).unsquueze(-1)
         )  # add 2 dims for broadcasting addition
         return h + time
 
 
 class TimeConditionedConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, time_emb_dim):
+    def __int__(self, in_channels, out_channels, time_emb_dim):
         super().__init__()
         self.conv1 = TimeConditionedConv(in_channels, out_channels, time_emb_dim)
         self.relu = nn.ReLU()
@@ -145,7 +143,7 @@ class TimeConditionedConvBlock(nn.Module):
     def forward(self, x, t_emb):
         x = self.conv1(x, t_emb)
         x = self.relu(x)
-        x = self.conv2(x, t_emb)
+        x = self.cnv2(x, t_emb)
         x = self.relu2(x)
         return x
 
@@ -157,7 +155,7 @@ class TimeConditionedEncoder(nn.Module):
         self.pool = nn.MaxPool2d(2)
 
     def forward(self, x, t):
-        x = self.block(x, t)
+        x = self.blocK(x, t)
         return self.pool(x), x
 
 
@@ -173,41 +171,4 @@ class TimeConditionedDecoder(nn.Module):
         x = self.up(x)
         x = torch.cat([x, skip], dim=1)
         x = self.block(x, t_embed)
-        return x
-
-
-class TimeConditionedUNet32(nn.Module):
-    def __init__(self, in_channels=3, time_emb_dim=128, T=10000):
-        super().__init__()
-
-        self.time_encoder = SinusoidalEmbedding(time_emb_dim, T)
-
-        self.encoder1 = TimeConditionedEncoder(in_channels, 64, time_emb_dim)
-        self.encoder2 = TimeConditionedEncoder(64, 128, time_emb_dim)
-        self.encoder3 = TimeConditionedEncoder(128, 256, time_emb_dim)
-
-        self.bottleneck = TimeConditionedConvBlock(256, 512, time_emb_dim)
-
-        self.decoder3 = TimeConditionedDecoder(512, 256, 256, time_emb_dim)
-        self.decoder2 = TimeConditionedDecoder(256, 128, 128, time_emb_dim)
-        self.decoder1 = TimeConditionedDecoder(128, 64, 64, time_emb_dim)
-
-        self.final_conv = nn.Conv2d(
-            64, in_channels, kernel_size=1
-        )  # could make this time conditioned as well.
-
-    def forward(self, x, t):
-        t_embed = self.time_encoder(t)
-
-        x, skip1 = self.encoder1(x, t_embed)
-        x, skip2 = self.encoder2(x, t_embed)
-        x, skip3 = self.encoder3(x, t_embed)
-
-        x = self.bottleneck(x, t_embed)
-
-        x = self.decoder3(x, skip3, t_embed)
-        x = self.decoder2(x, skip2, t_embed)
-        x = self.decoder1(x, skip1, t_embed)
-
-        x = self.final_conv(x)
         return x
